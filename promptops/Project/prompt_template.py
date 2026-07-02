@@ -1,14 +1,25 @@
 """
-PromptOps CLI — Module 2 contribution
+PromptOps CLI — Module 2 contribution, extended in Module 3 with error handling + logging
 
 Introduces the OOP backbone of the project:
 - PromptConfig: a dataclass holding model/temperature/etc settings
 - PromptTemplate: base class for a renderable prompt
 - SummarizePrompt / TranslatePrompt: concrete subclasses
 - PromptRunner: composition example - HAS a logger, doesn't extend one
+  (Module 3 update: now uses the logging module + raises InvalidPromptError on failure)
 """
 
+import logging
 from dataclasses import dataclass, field
+
+from exceptions import InvalidPromptError
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("promptops.prompt_template")
 
 
 @dataclass
@@ -63,26 +74,28 @@ class TranslatePrompt(PromptTemplate):
         return f"Translate the following text to {self.target_lang}:\n{self.text}"
 
 
-class Logger:
-    """Tiny logger used via composition by PromptRunner, not inheritance."""
-
-    def log(self, message):
-        print(f"[LOG] {message}")
-
-
 class PromptRunner:
     """
-    Composition example: PromptRunner HAS a Logger, it does not extend one.
+    Composition example: PromptRunner HAS a logger, it does not extend one.
     Runs any PromptTemplate (or subclass) polymorphically via .render().
+
+    Module 3 update: failures during render() are caught, logged with full
+    traceback (exc_info=True), and re-raised as a domain-specific
+    InvalidPromptError using 'raise ... from e' to preserve the original cause.
     """
 
     def __init__(self):
-        self.logger = Logger()
+        self.logger = logger
         self.history = []
 
     def run(self, prompt: PromptTemplate):
-        self.logger.log(f"Running prompt: {prompt.name}")
-        rendered = prompt.render()
+        self.logger.info(f"Running prompt: {prompt.name}")
+        try:
+            rendered = prompt.render()
+        except Exception as e:
+            self.logger.error(f"Prompt {prompt.name!r} failed to render", exc_info=True)
+            raise InvalidPromptError(prompt.name, str(e)) from e
+
         self.history.append({"name": prompt.name, "rendered": rendered})
         return rendered
 
@@ -114,3 +127,16 @@ if __name__ == "__main__":
 
     print(isinstance(summarizer, PromptTemplate))    # True - polymorphism check
     print(issubclass(TranslatePrompt, PromptTemplate))  # True
+
+    # --- Module 3 addition: demonstrate the error-handling path ---
+    class BrokenPrompt(PromptTemplate):
+        def render(self):
+            raise KeyError("missing_variable")  # simulate a low-level failure during render
+
+    broken = BrokenPrompt(name="broken-prompt")
+    try:
+        runner.run(broken)
+    except InvalidPromptError as e:
+        print(f"\nCaught domain error as expected: {e}")
+        print(f"  prompt_name={e.prompt_name}")
+        print(f"  reason={e.reason}")
